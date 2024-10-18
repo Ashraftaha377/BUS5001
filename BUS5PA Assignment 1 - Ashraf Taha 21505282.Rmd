@@ -1,0 +1,555 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+PART B: 1-C:
+
+```{r}
+install.packages("dplyr")
+install.packages("caret")
+library(dplyr)
+library(caret)
+
+# Loading the dataset
+Housing_data <- read.csv("HousingValuation.csv")
+
+# 1. Transforming Ordinal Variables using Label Encoding
+Housing_data <- Housing_data %>%
+  mutate(
+    LotShape = as.integer(LotShape),
+    Slope = as.integer(factor(Slope, levels = c("Sev", "Mod", "Gtl"))),
+    OverallQuality = as.integer(OverallQuality), 
+    OverallCondition = as.integer(OverallCondition), 
+    ExteriorCondition = as.integer(factor(ExteriorCondition, levels = c("Po", "Fa", "TA", "Gd", "Ex"))),
+    BasementCondition = as.integer(factor(BasementCondition, levels = c("NB", "Po", "Fa", "TA", "Gd", "Ex"))),
+    KitchenQuality = as.integer(factor(KitchenQuality, levels = c("Po", "Fa", "TA", "Gd", "Ex"))),
+    PavedDrive = as.integer(factor(PavedDrive, levels = c("N", "P", "Y"))),  # Assuming 'N' < 'P' < 'Y' as the order
+    Utilities = as.integer(factor(Utilities, levels = c("ELO", "NoSeWa", "NoSewr", "AllPub")))
+  )
+
+# 2. Transforming Nominal Variables using Label Encoding
+Housing_data <- Housing_data %>%
+  mutate(
+    LotConfig = as.integer(factor(LotConfig)),
+    LandContour = as.integer(factor(LandContour)),
+    DwellClass = as.integer(factor(DwellClass)),
+    CentralAir = as.integer(factor(CentralAir)),
+    GarageType = as.integer(factor(GarageType))
+  )
+
+# Displaying the transformed data
+head(Housing_data)
+```
+
+PART B: 2-A:
+
+```{r}
+library(tidyr)
+
+# Categorial Variables 
+categorical_variables <- colnames(Housing_data %>% select(LotShape, Utilities, Slope, OverallQuality, OverallCondition, ExteriorCondition, BasementCondition, KitchenQuality, PavedDrive, LotConfig, LandContour, DwellClass, CentralAir, GarageType))
+
+# Continous Variables 
+continuous_variables <- Housing_data %>%
+  select(-all_of(categorical_variables))
+
+# Summary statistics for continuous variables
+summary_statistics_continuous <- continuous_variables %>%
+  summarise(across(where(is.numeric), list(
+    mean = ~ mean(.x, na.rm = TRUE),
+    median = ~ median(.x, na.rm = TRUE),
+    max = ~ max(.x, na.rm = TRUE),
+    std = ~ sd(.x, na.rm = TRUE),
+    Q1 = ~ quantile(.x, 0.25, na.rm = TRUE),
+    Q3 = ~ quantile(.x, 0.75, na.rm = TRUE),
+    IQR = ~ IQR(.x, na.rm = TRUE)
+  )))
+
+summary_statistics_continuous <- summary_statistics_continuous %>%
+  pivot_longer(cols = everything(), 
+               names_to = c("Variable", "Statistic"), 
+               names_sep = "_") %>%
+  pivot_wider(names_from = Statistic, values_from = value)
+
+# Step 4:Count for categorical variables
+summary_statistics_categorical <- Housing_data %>%
+  select(all_of(categorical_variables)) %>%
+  summarise(across(everything(), ~ length(unique(.x)))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Count")
+
+
+# Combinig results
+summary_statistics <- list(
+  Continuous = summary_statistics_continuous,
+  Categorical_Counts = summary_statistics_categorical
+)
+
+# Display the results
+print("Summary Statistics for Continuous Variables:")
+print(summary_statistics$Continuous)
+
+print("Counts for Categorical Variables:")
+print(summary_statistics$Categorical_Counts)
+```
+
+
+
+PART B: 2-B
+
+```{r}
+summary_statistics_continuous <- summary_statistics_continuous %>%
+  mutate(Potential_Outlier = max > (Q3 + 1.5 * IQR))
+
+print (summary_statistics_continuous)
+```
+
+
+PART B: 3-A/B/C
+
+```{r}
+library(ggplot2)
+library(e1071) # For skewness function
+
+# Skewness continuous variables
+skewness_values <- continuous_variables %>%
+  summarise(across(everything(), ~ e1071::skewness(.x, na.rm = TRUE))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "skewness")
+
+# Ensuring skewness is numeric
+skewness_values <- skewness_values %>%
+  mutate(skewness = as.numeric(skewness))
+
+# Adding the skewness values into the existing summary statistics
+summary_statistics_continuous <- summary_statistics_continuous %>%
+  left_join(skewness_values, by = "Variable")
+
+# Plotting histograms for continuous variables
+for (variable in colnames(continuous_variables)) {
+  # Calculate the range of the data for the current variable
+  data_range <- max(continuous_variables[[variable]], na.rm = TRUE) - min(continuous_variables[[variable]], na.rm = TRUE)
+  
+  # Adjust binwidth for small ranges
+  binwidth <- ifelse(data_range < 15, 0.5, 30)
+  
+  p <- ggplot(continuous_variables, aes(x = !!sym(variable))) +
+    geom_histogram(binwidth = binwidth, fill = "blue", color = "black", alpha = 0.7) +
+    labs(title = paste("Histogram of", variable), x = variable, y = "Frequency") +
+    theme_minimal()
+  
+  # Print and save the plot
+  print(p)
+  ggsave(filename = paste0("histogram_", variable, ".png"), plot = p, width = 7, height = 7)
+}
+
+
+# a. Identify variables with large variability (std relative to mean)
+large_variability <- summary_statistics_continuous %>%
+  filter(std > 0.5 * mean) %>%
+  arrange(desc(std))
+
+# b. Identify skewed variables (absolute skewness > 1)
+skewed_variables <- summary_statistics_continuous %>%
+  filter(abs(skewness) > 1)
+
+# c. Identify variables with potential extreme values 
+extreme_values <- summary_statistics_continuous %>%
+  filter(Potential_Outlier == TRUE)
+
+# Print the findings
+cat("\nVariables with large variability (std > 50% of the mean):\n")
+print(large_variability$Variable)
+
+cat("\nVariables that seem skewed (absolute skewness > 1):\n")
+print(skewed_variables$Variable)
+
+cat("\nVariables with potential extreme values (Potential_Outlier == TRUE):\n")
+print(extreme_values$Variable)
+
+```
+
+PART B: 4-A
+
+```{r}
+# Check for missing values in the dataset
+missing_values <- sapply(Housing_data, function(x) sum(is.na(x)))
+missing_values <- missing_values[missing_values > 0]
+
+# Display variables with missing values
+missing_values_summary
+```
+
+PART B: 4-C
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(VIM)  # For k-NN imputation
+
+# Step 1: Mode Imputation for Nominal Variables 
+mode_imputation <- function(x) {
+  uniqx <- unique(x[!is.na(x)])
+  uniqx[which.max(tabulate(match(x, uniqx)))]
+}
+
+Housing_data_mode <- Housing_data %>%
+  mutate(
+    GarageType = ifelse(is.na(GarageType), mode_imputation(GarageType), GarageType),
+    YearBuilt = ifelse(is.na(YearBuilt), mode_imputation(YearBuilt), YearBuilt)
+  )
+
+# Step 2: Mean and Median Imputation for Continuous Variable 
+Housing_data_mean <- Housing_data %>%
+  mutate(LivingArea = ifelse(is.na(LivingArea), mean(LivingArea, na.rm = TRUE), LivingArea))
+
+Housing_data_median <- Housing_data %>%
+  mutate(LivingArea = ifelse(is.na(LivingArea), median(LivingArea, na.rm = TRUE), LivingArea))
+
+# Step 3: k-NN Imputation for All Variables
+Housing_data_knn <- kNN(Housing_data, k = 5, imp_var = FALSE)
+
+# Step 4: Deletion 
+Housing_data_deletion <- Housing_data %>% drop_na()
+
+# Step 5: Skewness Calculation and Summary Statistics for Evaluation
+variables_to_analyze <- c('LivingArea', 'GarageType', 'YearBuilt')
+methods <- c("Original", "Mode Imputation", "k-NN Imputation", "Deletion")
+
+for (variable in variables_to_analyze) {
+  
+  # Calculate skewness and summary statistics for each method
+  skewness_values <- list(
+    "Original" = e1071::skewness(Housing_data[[variable]], na.rm = TRUE),
+    "Mode Imputation" = e1071::skewness(Housing_data_mode[[variable]], na.rm = TRUE),
+    "k-NN Imputation" = e1071::skewness(Housing_data_knn[[variable]], na.rm = TRUE),
+    "Deletion" = e1071::skewness(Housing_data_deletion[[variable]], na.rm = TRUE)
+  )
+  
+  summary_stats <- list(
+    "Original" = summary(Housing_data[[variable]]),
+    "Mode Imputation" = summary(Housing_data_mode[[variable]]),
+    "k-NN Imputation" = summary(Housing_data_knn[[variable]]),
+    "Deletion" = summary(Housing_data_deletion[[variable]])
+  )
+  
+  # Print skewness and summary statistics for each method
+  cat("\nSkewness and Summary Statistics for", variable, ":\n")
+  for (method in methods) {
+    cat("\nMethod:", method, "\n")
+    cat("Skewness:", skewness_values[[method]], "\n")
+    print(summary_stats[[method]])
+  }
+  
+  # Plot histograms 
+  for (method in methods) {
+    plot_to_compare <- switch(method,
+                           "Original" = Housing_data,
+                           "Mode Imputation" = Housing_data_mode,
+                           "k-NN Imputation" = Housing_data_knn,
+                           "Deletion" = Housing_data_deletion)
+    
+    bin_width <- if (variable == "GarageType") 1 else 30
+    
+    p <- ggplot(plot_to_compare, aes_string(x = variable)) +
+      geom_histogram(binwidth = bin_width, fill = "blue", color = "black", alpha = 0.7) +
+      labs(title = paste("Distribution of", variable, "after", method), x = variable, y = "Frequency") +
+      theme_minimal()
+    
+    # Save the plot
+    ggsave(filename = paste0("histogram_", variable, "_", gsub(" ", "_", tolower(method)), ".png"), plot = p)
+      print(p)
+  }
+}
+
+```
+
+PART B: 5-A
+
+```{r}
+install.packages("GGally")
+library(GGally)
+library(ggcorrplot) 
+
+# Rename the dataset and removing id column as it's irrelevent 
+Housing_data_cleaned <- Housing_data_knn %>% select(-Id)
+# Coorelation Matrix 
+ggcorr(Housing_data_cleaned, label = TRUE, label_size = 2, label_round = 2, hjust = 1, size = 2.5,  layout.exp = 2.2)
+#  plotting correlation matrix
+
+# Calculate the correlation matrix for all variables
+correlation_matrix_all <- cor(Housing_data_cleaned, use = "complete.obs")
+
+# Print the correlation matrix
+print(correlation_matrix_all)
+
+
+
+```
+
+PART B: 5-B
+
+```{r}
+threshold = 0.65
+upper_tri <- correlation_matrix_all
+
+# Find the pairs with correlations above the threshold
+high_correlation_pairs <- which(abs(upper_tri) > threshold, arr.ind = TRUE)
+
+# Display the pairs of variables with high correlation and their correlation values
+high_corr_vars <- data.frame(
+  Variable1 = rownames(upper_tri)[high_correlation_pairs[, 1]],
+  Variable2 = colnames(upper_tri)[high_correlation_pairs[, 2]],
+  Correlation = upper_tri[high_correlation_pairs]
+)
+
+# Print the results
+print(high_corr_vars)
+```
+
+```{r}
+Housing_data_reduced <- Housing_data_cleaned %>%
+  select(-TotalRmsAbvGrd, -Utilities, -LandContour)
+```
+
+PART B: 5-C
+
+
+```{r}
+library(ggplot2)
+
+# Selected variables to explore against SalePrice
+selected_variables <- c("LivingArea", "OverallQuality", "TotalBSF", "GarageCars")
+
+# Loop through each selected variable and plot its distribution against SalePrice
+for (variable in selected_variables) {
+  p <- ggplot(Housing_data_reduced, aes_string(x = variable, y = "SalePrice")) +
+    geom_point(alpha = 0.5) +  # Scatter plot
+    geom_smooth(method = "lm", color = "blue", se = FALSE) +  # Add a trend line
+    labs(title = paste("SalePrice vs", variable), x = variable, y = "SalePrice") +
+    theme_minimal()
+  
+  print (p)
+  
+  # Save the plot 
+  ggsave(filename = paste0("SalePrice_vs_", variable, ".png"), plot = p, width = 7, height = 7)
+}
+```
+PART C: 1-A
+
+```{r}
+# Set up the sample size for the training set (2/3 of the data)
+
+smp_size <- floor(2/3 * nrow(Housing_data_reduced))
+set.seed(2) 
+Housing_data_selected <- Housing_data_reduced[sample(nrow(Housing_data_reduced)), ]
+
+
+# Create the training dataset
+housing_train <- Housing_data_selected[1:smp_size, ]
+
+# Create the test dataset
+housing_test <- Housing_data_selected[(smp_size+1):nrow(Housing_data_selected), ]
+
+# Build the regression model using the training data
+model <- lm(SalePrice ~ GarageCars + TotalBSF + OverallQuality + LivingArea, data = housing_train)
+
+# View the model summary
+summary(model)
+
+# Display the coefficients of the linear regression model
+coefficients <- summary(model)$coefficients
+
+# Create the regression equation as a string
+equation <- paste0("y ~ ", round(coefficients(model)[1], 2), " + ",
+                   paste(sprintf("%.2f * %s", coefficients(model)[-1], names(coefficients(model)[-1])), collapse = " + "))
+
+# Print the regression equation
+equation
+
+
+```
+Q3: 1-B/C:
+
+```{r}
+#  Predictions for Train and Test Datasets
+housing_train$predicted.SalePrice <- predict(model, housing_train)
+housing_test$predicted.SalePrice <- predict(model, housing_test)
+
+# Add a column to identify the dataset
+housing_train$Dataset <- 'Train'
+housing_test$Dataset <- 'Test'
+
+# Print the first 5 actual and predicted values for the test dataset
+print("Actual Values:")
+head(housing_test$SalePrice, 5)
+
+print("Predicted Values:")
+head(housing_test$predicted.SalePrice, 5)
+
+# Combine the train and test datasets
+combined_data <- rbind(housing_train, housing_test)
+
+#Plot Predicted Values vs. Actual Values for both Train and Test Datasets
+
+library(ggplot2)
+
+# Create the plot
+pl_combined <- ggplot(combined_data, aes(x = SalePrice, y = predicted.SalePrice, color = Dataset)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", aes(color = Dataset), se = FALSE) +
+  xlab('Actual SalePrice') +
+  ylab('Predicted SalePrice') +
+  theme_bw() +
+  scale_color_manual(values = c("Train" = "blue", "Test" = "red"))
+
+# Display the plot
+print(pl_combined)
+
+```
+```{r}
+
+# Model 1: The Chosen Model
+model1 <- lm(SalePrice ~ GarageCars + TotalBSF + OverallQuality + LivingArea, data = housing_train)
+
+# Model 2: Kitchen Quality and FullBath
+model2 <- lm(SalePrice ~ GarageCars + TotalBSF + OverallQuality + LivingArea + KitchenQuality + FullBath, data = housing_train)
+
+# Model 3: Interaction Terms
+model3 <- lm(SalePrice ~ GarageCars * TotalBSF + OverallQuality * LivingArea, data = housing_train)
+
+# Model 4: Kitchen Quality, Fireplaces, CentralAir, ExteriorCondition and FullBath
+model4 <- lm(SalePrice ~ GarageCars + TotalBSF + OverallQuality + LivingArea + KitchenQuality + FullBath + Fireplaces + CentralAir + ExteriorCondition , data = housing_train)
+
+# Evaluate Model 1
+predictions1 <- predict(model1, housing_test)
+rsquared1 <- summary(model1)$r.squared
+rmse1 <- sqrt(mean((predictions1 - housing_test$SalePrice)^2))
+
+# Evaluate Model 2
+predictions2 <- predict(model2, housing_test)
+rsquared2 <- summary(model2)$r.squared
+rmse2 <- sqrt(mean((predictions2 - housing_test$SalePrice)^2))
+
+# Evaluate Model 3
+predictions3 <- predict(model3, housing_test)
+rsquared3 <- summary(model3)$r.squared
+rmse3 <- sqrt(mean((predictions3 - housing_test$SalePrice)^2))
+
+# Evaluate Model 3
+predictions4 <- predict(model4, housing_test)
+rsquared4 <- summary(model4)$r.squared
+rmse4 <- sqrt(mean((predictions4 - housing_test$SalePrice)^2))
+
+# Compare Models
+comparison <- data.frame(
+  Model = c("Model 1", "Model 2", "Model3", "Model 4"),
+  R_squared = c(rsquared1, rsquared2, rsquared3, rsquared4),
+  RMSE = c(rmse1, rmse2, rmse3, rmse4)
+)
+
+# Print the comparison table
+print(comparison)
+
+
+
+```
+
+Equations:
+```{r}
+# Model 1 Formula
+equation1 <- paste0("y ~ ", round(coefficients(model1)[1], 2), " + ",
+                   paste(sprintf("%.2f * %s", coefficients(model1)[-1], names(coefficients(model1)[-1])), collapse = " + "))
+print(equation1)
+
+# Model 2 Formula
+equation2 <- paste0("y ~ ", round(coefficients(model2)[1], 2), " + ",
+                   paste(sprintf("%.2f * %s", coefficients(model2)[-1], names(coefficients(model2)[-1])), collapse = " + "))
+print(equation2)
+
+# Model 3 Formula
+equation3 <- paste0("y ~ ", round(coefficients(model3)[1], 2), " + ",
+                   paste(sprintf("%.2f * %s", coefficients(model3)[-1], names(coefficients(model3)[-1])), collapse = " + "))
+print(equation3)
+
+# Model 4 Formula
+equation3 <- paste0("y ~ ", round(coefficients(model4)[1], 2), " + ",
+                   paste(sprintf("%.2f * %s", coefficients(model4)[-1], names(coefficients(model4)[-1])), collapse = " + "))
+print(equation3)
+```
+
+PART C: 2-A
+
+```{r}
+library(rpart)
+library(rpart.plot)
+# Remove the 'Dataset' column from both datasets to avoid future error 
+housing_train <- housing_train[, !(names(housing_train) %in% "Dataset")]
+housing_test <- housing_test[, !(names(housing_test) %in% "Dataset")]
+# Build the decision tree using all variables
+dtree1 <- rpart(SalePrice ~ ., 
+                    data = housing_train, 
+                    method = "anova")
+
+dtree1$variable.importance
+
+# Visualize the decision tree
+print (dtree1)
+rpart.plot(dtree, main = "Decision Tree for SalePrice Prediction")
+
+dtree1predictions <- predict(dtree1, housing_test) 
+print("Actual Values") 
+head(housing_test$SalePrice[1:5])
+print("Predicted Values") 
+head(as.vector(dtree1predictions), 5)
+
+```
+
+Q3: 2-B and C
+```{r}
+library(rpart)
+library(rpart.plot)
+
+# Determine the optimal CP value for pruning
+optimal_cp <- dtree1$cptable[which.min(dtree1$cptable[,"xerror"]), "CP"]
+print(paste("Optimal CP value:", optimal_cp))
+
+# Evaluate the initial decision tree
+rmse_initial <- sqrt(mean((dtree1predictions - housing_test$SalePrice)^2))
+print(paste("Initial Decision Tree RMSE:", rmse_initial))
+
+# Prune the tree using the optimal CP value
+pruned_tree_optimal <- prune(dtree1, cp = optimal_cp)
+pruned_predictions_optimal <- predict(pruned_tree_optimal, housing_test)
+rmse_pruned_optimal <- sqrt(mean((pruned_predictions_optimal - housing_test$SalePrice)^2))
+print(paste("Pruned Decision Tree RMSE (Optimal CP):", rmse_pruned_optimal))
+
+
+# Create and evaluate three additional pruned trees with different CP values
+# Model 1: Less pruning (lower CP)
+cp_less_pruned <- optimal_cp * 0.8
+pruned_tree_less <- prune(dtree, cp = cp_less_pruned)
+pruned_predictions_less <- predict(pruned_tree_less, housing_test)
+rmse_pruned_less <- sqrt(mean((pruned_predictions_less - housing_test$SalePrice)^2))
+print(paste("Pruned Decision Tree RMSE (Less Pruned):", rmse_pruned_less))
+
+# Model 2: More pruning (higher CP)
+cp_more_pruned <- optimal_cp * 1.2
+pruned_tree_more <- prune(dtree, cp = cp_more_pruned)
+pruned_predictions_more <- predict(pruned_tree_more, housing_test)
+rmse_pruned_more <- sqrt(mean((pruned_predictions_more - housing_test$SalePrice)^2))
+print(paste("Pruned Decision Tree RMSE (More Pruned):", rmse_pruned_more))
+
+# Model 3: Moderate pruning (middle CP between optimal and more pruned)
+cp_moderate_pruned <- (optimal_cp + cp_more_pruned) / 2
+pruned_tree_moderate <- prune(dtree, cp = cp_moderate_pruned)
+pruned_predictions_moderate <- predict(pruned_tree_moderate, housing_test)
+rmse_pruned_moderate <- sqrt(mean((pruned_predictions_moderate - housing_test$SalePrice)^2))
+print(paste("Pruned Decision Tree RMSE (Moderate Pruned):", rmse_pruned_moderate))
+
+# Visualize and compare the pruned trees
+rpart.plot(pruned_tree_optimal, main = "Pruned Decision Tree (Optimal CP)")
+rpart.plot(pruned_tree_less, main = "Pruned Decision Tree (Less Pruned)")
+rpart.plot(pruned_tree_more, main = "Pruned Decision Tree (More Pruned)")
+rpart.plot(pruned_tree_moderate, main = "Pruned Decision Tree (Moderate Pruned)")
+
+```
+
