@@ -5,13 +5,13 @@ This project uses a data-driven approach to predict property prices based on 113
 
 1. The dataset is processed using Python.
 2. A simple linear regression model is used to predict the property prices.
-3. You can extend the project with other predictive models like decision trees or random forests.
+3. A Decision Tree model is also used.
 
 ## Instructions
 
 1. Clone the repository
-2.  Ensure you have the necessary Python libraries installed (e.g.,'pandas', 'scikit-learn')
-3.  Run the script
+2. Ensure you have the necessary Python libraries installed (e.g.,'pandas', 'scikit-learn')
+3. Run the script
 
 
 ## Data
